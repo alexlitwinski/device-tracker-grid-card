@@ -9,7 +9,7 @@
  * 
  * Cada linha possui um botão para reconectar o dispositivo chamando um serviço do HA.
  * 
- * Versão: 1.0.0
+ * Versão: 1.1.0 - Adicionada ordenação por colunas
  */
 
 class DeviceTrackerGrid extends HTMLElement {
@@ -30,6 +30,12 @@ class DeviceTrackerGrid extends HTMLElement {
     // Flags para controle de renderização
     this._isInitialRender = true;
     this._updateTimerId = null;
+    
+    // Estado inicial de ordenação
+    this._sortState = {
+      column: 'name',
+      order: 'asc'
+    };
   }
 
   setConfig(config) {
@@ -49,11 +55,19 @@ class DeviceTrackerGrid extends HTMLElement {
       state_text: config.state_text || true,
       alternating_rows: config.alternating_rows !== false,
       show_filter: config.show_filter !== false, // Por padrão, mostra o campo de filtro
-      filter_placeholder: config.filter_placeholder || 'Filtrar dispositivos...'
+      filter_placeholder: config.filter_placeholder || 'Filtrar dispositivos...',
+      sortable_columns: config.sortable_columns || ['name', 'mac', 'ip'], // Colunas que podem ser ordenadas
+      enable_sorting: config.enable_sorting !== false // Por padrão, permite ordenação
     };
     
     // Inicializa o filtro vazio
     this._textFilter = '';
+    
+    // Define o estado inicial de ordenação baseado na configuração
+    this._sortState = {
+      column: this.config.sort_by,
+      order: this.config.sort_order
+    };
     
     this._isInitialRender = true;
   }
@@ -161,11 +175,11 @@ class DeviceTrackerGrid extends HTMLElement {
   }
 
   _sortDeviceList(deviceList) {
-    const { sort_by, sort_order } = this.config;
+    const { column, order } = this._sortState;
     
     deviceList.sort((a, b) => {
-      let valA = a[sort_by];
-      let valB = b[sort_by];
+      let valA = a[column];
+      let valB = b[column];
       
       // Tratar valores null ou undefined
       if (valA === null || valA === undefined) valA = '';
@@ -175,8 +189,8 @@ class DeviceTrackerGrid extends HTMLElement {
       if (typeof valA === 'string') valA = valA.toLowerCase();
       if (typeof valB === 'string') valB = valB.toLowerCase();
       
-      if (valA < valB) return sort_order === 'asc' ? -1 : 1;
-      if (valA > valB) return sort_order === 'asc' ? 1 : -1;
+      if (valA < valB) return order === 'asc' ? -1 : 1;
+      if (valA > valB) return order === 'asc' ? 1 : -1;
       return 0;
     });
   }
@@ -421,6 +435,36 @@ class DeviceTrackerGrid extends HTMLElement {
         color: var(--secondary-text-color);
         font-style: italic;
       }
+      
+      /* Estilos para cabeçalhos ordenáveis */
+      .sortable {
+        cursor: pointer;
+        user-select: none;
+        position: relative;
+      }
+      
+      .sortable:hover {
+        color: var(--primary-color);
+      }
+      
+      .sort-icon {
+        margin-left: 5px;
+        font-size: 12px;
+        position: relative;
+        top: 1px;
+      }
+      
+      .sort-asc:after {
+        content: "▲";
+        display: inline-block;
+        margin-left: 5px;
+      }
+      
+      .sort-desc:after {
+        content: "▼";
+        display: inline-block;
+        margin-left: 5px;
+      }
     `;
     
     this.shadowRoot.appendChild(style);
@@ -512,14 +556,32 @@ class DeviceTrackerGrid extends HTMLElement {
         if (column === 'name') {
           const th = document.createElement('th');
           th.textContent = 'Nome';
+          
+          // Tornar ordenável se configurado
+          if (this.config.enable_sorting && this.config.sortable_columns.includes('name')) {
+            this._makeSortable(th, 'name');
+          }
+          
           headerRow.appendChild(th);
         } else if (column === 'mac') {
           const th = document.createElement('th');
           th.textContent = 'MAC';
+          
+          // Tornar ordenável se configurado
+          if (this.config.enable_sorting && this.config.sortable_columns.includes('mac')) {
+            this._makeSortable(th, 'mac');
+          }
+          
           headerRow.appendChild(th);
         } else if (column === 'ip') {
           const th = document.createElement('th');
           th.textContent = 'IP';
+          
+          // Tornar ordenável se configurado
+          if (this.config.enable_sorting && this.config.sortable_columns.includes('ip')) {
+            this._makeSortable(th, 'ip');
+          }
+          
           headerRow.appendChild(th);
         } else if (column === 'actions') {
           const th = document.createElement('th');
@@ -567,6 +629,40 @@ class DeviceTrackerGrid extends HTMLElement {
         filterInput: this.config.show_filter ? cardContent.querySelector('.filter-input') : null
       };
     }
+  }
+
+  // Método para tornar um cabeçalho ordenável
+  _makeSortable(headerElement, column) {
+    headerElement.className = 'sortable';
+    
+    // Adicionar indicador de ordenação se esta coluna for a ordenada atualmente
+    if (this._sortState.column === column) {
+      headerElement.classList.add(this._sortState.order === 'asc' ? 'sort-asc' : 'sort-desc');
+    }
+    
+    headerElement.addEventListener('click', () => {
+      // Se já está ordenando por esta coluna, inverte a ordem
+      if (this._sortState.column === column) {
+        this._sortState.order = this._sortState.order === 'asc' ? 'desc' : 'asc';
+      } else {
+        // Senão, muda para esta coluna em ordem ascendente
+        this._sortState.column = column;
+        this._sortState.order = 'asc';
+      }
+      
+      // Reordenar e atualizar a grid
+      this._sortDeviceList(this._cache.deviceList);
+      
+      // Atualizar os indicadores visuais em todos os cabeçalhos
+      const headers = this.shadowRoot.querySelectorAll('.sortable');
+      headers.forEach(header => {
+        header.classList.remove('sort-asc', 'sort-desc');
+      });
+      
+      headerElement.classList.add(this._sortState.order === 'asc' ? 'sort-asc' : 'sort-desc');
+      
+      this._updateGrid();
+    });
   }
 
   _updateGrid() {
