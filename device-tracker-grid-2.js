@@ -47,8 +47,13 @@ class DeviceTrackerGrid extends HTMLElement {
       sort_by: config.sort_by || 'name',
       sort_order: config.sort_order || 'asc',
       state_text: config.state_text || true,
-      alternating_rows: config.alternating_rows !== false
+      alternating_rows: config.alternating_rows !== false,
+      show_filter: config.show_filter !== false, // Por padrão, mostra o campo de filtro
+      filter_placeholder: config.filter_placeholder || 'Filtrar dispositivos...'
     };
+    
+    // Inicializa o filtro vazio
+    this._textFilter = '';
     
     this._isInitialRender = true;
   }
@@ -56,17 +61,29 @@ class DeviceTrackerGrid extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     
+    // Salvar o filtro anterior para detectar mudanças
+    this._previousTextFilter = this._textFilter;
+    
     // Atualizar a lista de dispositivos e verificar mudanças
     if (this._updateDeviceList() || this._isInitialRender) {
       this._throttledUpdate();
     }
   }
 
+  // Função auxiliar para normalizar texto (remover acentos e converter para minúsculas)
+  _normalizeText(text) {
+    if (!text) return '';
+    return text.normalize('NFD')
+               .replace(/[\u0300-\u036f]/g, '') // Remove acentos
+               .toLowerCase();
+  }
+  
   _updateDeviceList() {
     if (!this._hass) return false;
     
     const newDeviceList = [];
     let hasChanges = false;
+    const normalizedFilter = this._normalizeText(this._textFilter);
     
     // Obter todas as entidades do tipo device_tracker
     Object.entries(this._hass.states).forEach(([entityId, stateObj]) => {
@@ -75,7 +92,7 @@ class DeviceTrackerGrid extends HTMLElement {
         const macAttribute = stateObj.attributes.mac;
         
         if (macAttribute) {
-          // Verificar filtros
+          // Verificar filtros por entidade
           if (this.config.filter_by_entity.length > 0 && 
               !this.config.filter_by_entity.includes(entityId)) {
             return;
@@ -96,6 +113,23 @@ class DeviceTrackerGrid extends HTMLElement {
             last_updated: stateObj.last_updated,
             attributes: stateObj.attributes
           };
+          
+          // Aplicar filtro de texto se existir
+          if (normalizedFilter) {
+            const normalizedName = this._normalizeText(device.name);
+            const normalizedMac = this._normalizeText(device.mac);
+            const normalizedIp = this._normalizeText(device.ip);
+            
+            // Verificar se o dispositivo contém o texto do filtro
+            const matchesFilter = 
+              normalizedName.includes(normalizedFilter) || 
+              normalizedMac.includes(normalizedFilter) || 
+              normalizedIp.includes(normalizedFilter);
+            
+            if (!matchesFilter) {
+              return;
+            }
+          }
           
           newDeviceList.push(device);
           
@@ -123,7 +157,7 @@ class DeviceTrackerGrid extends HTMLElement {
     }
     
     this._cache.deviceList = newDeviceList;
-    return hasChanges;
+    return hasChanges || this._textFilter !== this._previousTextFilter;
   }
 
   _sortDeviceList(deviceList) {
@@ -181,6 +215,8 @@ class DeviceTrackerGrid extends HTMLElement {
         --border-color: var(--card-border-color, var(--divider-color));
         --shadow-color: var(--card-shadow-color, rgba(0,0,0,0.08));
         --border-radius: var(--card-border-radius, var(--ha-card-border-radius, 12px));
+        --input-text-color: var(--text-color);
+        --input-background-color: var(--background-color);
       }
       
       ha-card {
@@ -322,6 +358,69 @@ class DeviceTrackerGrid extends HTMLElement {
       .loading-icon {
         animation: spin 1s linear infinite;
       }
+      
+      .filter-container {
+        position: relative;
+        margin-bottom: 16px;
+      }
+      
+      .filter-input {
+        width: 100%;
+        padding: 10px 10px 10px 35px;
+        font-size: 14px;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background-color: var(--input-background-color);
+        color: var(--input-text-color);
+        box-sizing: border-box;
+        transition: border-color 0.3s;
+      }
+      
+      .filter-input:focus {
+        outline: none;
+        border-color: var(--primary-color);
+      }
+      
+      .filter-input::placeholder {
+        color: var(--secondary-text-color);
+        opacity: 0.7;
+      }
+      
+      .filter-icon {
+        position: absolute;
+        left: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--secondary-text-color);
+        opacity: 0.7;
+      }
+      
+      .clear-filter {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--secondary-text-color);
+        opacity: 0.7;
+        cursor: pointer;
+        background: none;
+        border: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+      }
+      
+      .clear-filter:hover {
+        opacity: 1;
+      }
+      
+      .no-results {
+        padding: 24px;
+        text-align: center;
+        color: var(--secondary-text-color);
+        font-style: italic;
+      }
     `;
     
     this.shadowRoot.appendChild(style);
@@ -353,6 +452,53 @@ class DeviceTrackerGrid extends HTMLElement {
     const cardContent = document.createElement('div');
     cardContent.className = 'card-content';
     card.appendChild(cardContent);
+    
+    // Campo de filtro
+    if (this.config.show_filter) {
+      const filterContainer = document.createElement('div');
+      filterContainer.className = 'filter-container';
+      
+      const filterIcon = document.createElement('ha-icon');
+      filterIcon.icon = 'mdi:magnify';
+      filterIcon.className = 'filter-icon';
+      filterContainer.appendChild(filterIcon);
+      
+      const filterInput = document.createElement('input');
+      filterInput.type = 'text';
+      filterInput.className = 'filter-input';
+      filterInput.placeholder = this.config.filter_placeholder;
+      filterInput.value = this._textFilter;
+      filterInput.addEventListener('input', (e) => {
+        this._previousTextFilter = this._textFilter;
+        this._textFilter = e.target.value;
+        this._updateDeviceList();
+        this._updateGrid();
+        
+        // Mostrar/esconder o botão limpar
+        if (this._textFilter && this._textFilter.length > 0) {
+          clearButton.style.display = 'flex';
+        } else {
+          clearButton.style.display = 'none';
+        }
+      });
+      filterContainer.appendChild(filterInput);
+      
+      const clearButton = document.createElement('button');
+      clearButton.className = 'clear-filter';
+      clearButton.innerHTML = '<ha-icon icon="mdi:close"></ha-icon>';
+      clearButton.style.display = this._textFilter ? 'flex' : 'none';
+      clearButton.addEventListener('click', () => {
+        this._previousTextFilter = this._textFilter;
+        this._textFilter = '';
+        filterInput.value = '';
+        clearButton.style.display = 'none';
+        this._updateDeviceList();
+        this._updateGrid();
+      });
+      filterContainer.appendChild(clearButton);
+      
+      cardContent.appendChild(filterContainer);
+    }
     
     // Grid de dispositivos
     if (this._cache.deviceList.length > 0) {
@@ -394,7 +540,8 @@ class DeviceTrackerGrid extends HTMLElement {
       this._cache.elements = {
         card,
         gridContainer,
-        tbody
+        tbody,
+        filterInput: this.config.show_filter ? cardContent.querySelector('.filter-input') : null
       };
       
       cardContent.appendChild(gridContainer);
@@ -402,11 +549,23 @@ class DeviceTrackerGrid extends HTMLElement {
       // Inicializar a grid com os dispositivos
       this._updateGrid();
     } else {
-      // Mensagem de vazio
+      // Verificar se não há resultados devido ao filtro
+      let messageText = 'Nenhum dispositivo encontrado com as configurações atuais.';
+      
+      if (this._textFilter) {
+        messageText = `Nenhum dispositivo encontrado para o filtro "${this._textFilter}".`;
+      }
+      
       const emptyMessage = document.createElement('div');
-      emptyMessage.className = 'empty-message';
-      emptyMessage.innerHTML = 'Nenhum dispositivo encontrado com as configurações atuais.';
+      emptyMessage.className = this._textFilter ? 'no-results' : 'empty-message';
+      emptyMessage.innerHTML = messageText;
       cardContent.appendChild(emptyMessage);
+      
+      // Armazenar referência para o input de filtro mesmo sem resultados
+      this._cache.elements = {
+        card,
+        filterInput: this.config.show_filter ? cardContent.querySelector('.filter-input') : null
+      };
     }
   }
 
